@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Website Toolkit</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Website Toolkit</p>
+          <h1 id="page-host">—</h1>
+          <p class="muted" id="page-url">—</p>
+        </div>
+        <div class="top-actions">
+          <button type="button" class="btn primary" id="btn-scan">Scan page</button>
+          <button type="button" class="btn" id="btn-open-tab" title="Open this toolkit in a tab">Open in tab</button>
+        </div>
+      </header>
+
+      <p class="status" id="status" role="status"></p>
+      <p class="banner hidden" id="restricted-banner">This page cannot be inspected by browser extensions.</p>
+      <div class="previous-scan hidden" id="previous-scan"></div>
+
+      <nav class="nav" aria-label="Modules">
+        <button type="button" class="nav-btn active" data-view="overview">Overview</button>
+        <button type="button" class="nav-btn" data-view="performance">Performance</button>
+        <button type="button" class="nav-btn" data-view="accessibility">Accessibility</button>
+        <button type="button" class="nav-btn" data-view="bugs">Bug Reporter</button>
+        <button type="button" class="nav-btn" data-view="contao">Contao</button>
+      </nav>
+
+      <main>
+        <section class="view active" id="view-overview"></section>
+        <section class="view" id="view-performance"></section>
+        <section class="view" id="view-accessibility"></section>
+        <section class="view" id="view-bugs"></section>
+        <section class="view" id="view-contao"></section>
+      </main>
+    </div>
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>
