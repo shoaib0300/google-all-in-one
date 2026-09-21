@@ -92,7 +92,7 @@ async function ensureContentScript(tabId) {
       files: ["src/content/content.js"]
     });
   } catch {
-    // Fall through to ping — manifest content script may already be active
+    // Injection may fail on restricted pages
   }
   try {
     const ping = await api.tabs.sendMessage(tabId, { type: "wt-ping" });

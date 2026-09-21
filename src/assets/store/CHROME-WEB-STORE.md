@@ -58,9 +58,11 @@ WHY INSTALL IT
 
 PERMISSIONS
 
-• activeTab / scripting — analyze the page you choose to scan
-• storage — save the latest scan and bug drafts locally
-• Host access to http(s) pages — content script and screenshots on normal websites
+• activeTab — temporary access to the tab you choose to inspect
+• scripting — inject the analyzer into that tab on demand
+• storage — save the latest scan and Bug Reporter drafts locally
+
+This extension does not request broad host permissions.
 
 LIMITATIONS
 

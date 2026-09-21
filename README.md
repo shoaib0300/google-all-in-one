@@ -60,11 +60,11 @@ Each package zip has a single `manifest.json` at the archive root.
 
 | Permission | Why |
 | --- | --- |
-| `activeTab` | Access the tab you are inspecting after you open the toolkit / click Scan or Capture |
-| `scripting` | Inject/reconnect the content script when needed |
+| `activeTab` | Temporary access to the tab you are inspecting after you open the toolkit / click Scan or Capture |
+| `scripting` | Inject the analyzer into that tab on demand (no always-on access to all sites) |
 | `storage` | Persist latest scan + bug-report drafts locally |
-| `http://*/*`, `https://*/*` | Content script + screenshots on normal websites |
 
+The extension does **not** request broad host permissions (`http://*/*` / `https://*/*`). Analysis runs only after an explicit user gesture (opening the extension / scanning).
 ## Privacy
 
 * Analysis runs in your browser against the current page.
@@ -81,7 +81,8 @@ Each package zip has a single `manifest.json` at the archive root.
 ## Limitations
 
 * Restricted pages (`chrome://`, `about:`, Web Store / AMO, extension pages) cannot be inspected.
-* Console/network hooks start after the content script loads.
+* The analyzer is injected when you open/scan — it is not injected into every site in the background.
+* Console/network hooks start after the analyzer is injected (not a full historical browser log).
 * Some Web Vitals may be unavailable until the browser exposes entries.
 * Accessibility results are heuristics, not WCAG certification.
 * Technology/CMS detection uses frontend signals only; versions are never guessed.

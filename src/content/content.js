@@ -1,6 +1,7 @@
 /**
- * Content script: lightweight hooks + on-demand page analysis.
- * Runs at document_start to capture console/network signals after load.
+ * Content script: on-demand page analysis.
+ * Injected via chrome.scripting / browser.scripting after the user opens the
+ * extension or clicks Scan (activeTab) — not registered for all sites in the manifest.
  *
  * Safe to re-inject: updates window.__wtRunScan so Scan Page always uses the
  * latest analyzer (fonts/colors/CMS) even if an older copy was already on the tab.

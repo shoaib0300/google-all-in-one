@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Website Toolkit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local developer & QA toolkit: technology detection, performance, accessibility, bug reports, and Contao helpers.",
   "icons": {
     "16": "src/assets/icons/icon16.png",
@@ -26,18 +26,6 @@
     "activeTab",
     "scripting",
     "storage"
-  ],
-  "host_permissions": [
-    "http://*/*",
-    "https://*/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["src/content/content.js"],
-      "run_at": "document_start",
-      "all_frames": false
-    }
   ],
   "browser_specific_settings": {
     "gecko": {
