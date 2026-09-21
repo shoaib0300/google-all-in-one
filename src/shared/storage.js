@@ -31,6 +31,13 @@ export function sanitizeReportForStorage(report) {
   if (copy.accessibility?.findings) {
     copy.accessibility.findings = copy.accessibility.findings.slice(0, 120);
   }
+  if (copy.design) {
+    copy.design.fonts = (copy.design.fonts || []).slice(0, 16);
+    copy.design.textColors = (copy.design.textColors || []).slice(0, 18);
+    copy.design.backgroundColors = (copy.design.backgroundColors || []).slice(0, 18);
+    copy.design.fontFiles = (copy.design.fontFiles || []).slice(0, 12);
+    copy.design.fontStylesheets = (copy.design.fontStylesheets || []).slice(0, 8);
+  }
   if (copy.runtime) {
     copy.runtime.consoleErrors = (copy.runtime.consoleErrors || []).slice(-20);
     copy.runtime.failedRequests = (copy.runtime.failedRequests || []).slice(-20);

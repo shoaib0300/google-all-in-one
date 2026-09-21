@@ -20,8 +20,12 @@ node scripts/build.js
 
 Creates:
 
-* `dist/chrome/` — load unpacked in Chrome
-* `dist/firefox/` — load temporary add-on in Firefox
+| Output | Purpose |
+| --- | --- |
+| `dist/chrome/` | Load unpacked in Chrome |
+| `dist/firefox/` | Load temporary add-on in Firefox |
+| `packages/website-toolkit-chrome.zip` | **Upload to Chrome Web Store** |
+| `packages/website-toolkit-firefox.zip` | **Upload to Firefox Add-ons (AMO)** |
 
 Or build one target:
 
@@ -30,6 +34,13 @@ node scripts/build.js chrome
 node scripts/build.js firefox
 ```
 
+### Store upload (important)
+
+Upload **only** the zip from `packages/` for that browser.
+
+Do **not** zip the whole repository — it contains multiple `manifest.json` files and stores will reject it.
+
+Each package zip has a single `manifest.json` at the archive root.
 ## Load in Chrome
 
 1. `node scripts/build.js chrome` (or use the repo root after a chrome build)
@@ -76,6 +87,11 @@ node scripts/build.js firefox
 * Technology/CMS detection uses frontend signals only; versions are never guessed.
 * Temporary Firefox installs unload on browser restart.
 
-## Temporary icons
+## Icons & store assets
 
-`src/assets/icons/` contains temporary development placeholders.
+Brand icons live in `src/assets/icons/` (`16` / `32` / `48` / `128`).
+
+Full logo and store-ready images are in `src/assets/store/`:
+
+* `store-icon-128.png` — Chrome Web Store listing icon
+* `logo-512.png` / `logo-1024.png` — full wordmark logo

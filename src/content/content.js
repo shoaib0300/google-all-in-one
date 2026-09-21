@@ -1,18 +1,17 @@
 /**
  * Content script: lightweight hooks + on-demand page analysis.
  * Runs at document_start to capture console/network signals after load.
+ *
+ * Safe to re-inject: updates window.__wtRunScan so Scan Page always uses the
+ * latest analyzer (fonts/colors/CMS) even if an older copy was already on the tab.
  */
 
 (() => {
-  if (window.__websiteToolkitInjected) {
-    return;
-  }
-  window.__websiteToolkitInjected = true;
-
+  const SCRIPT_VERSION = 3;
   const api = typeof browser !== "undefined" && browser?.runtime?.id != null ? browser : chrome;
 
-  const consoleErrors = [];
-  const failedRequests = [];
+  const consoleErrors = window.__wtConsoleErrors || (window.__wtConsoleErrors = []);
+  const failedRequests = window.__wtFailedRequests || (window.__wtFailedRequests = []);
   const MAX_LOG = 50;
 
   function pushCapped(list, item) {
@@ -21,100 +20,6 @@
       list.shift();
     }
   }
-
-  const originalError = console.error.bind(console);
-  const originalWarn = console.warn.bind(console);
-
-  console.error = (...args) => {
-    pushCapped(consoleErrors, {
-      level: "error",
-      message: args.map(stringifyArg).join(" "),
-      time: new Date().toISOString()
-    });
-    originalError(...args);
-  };
-
-  console.warn = (...args) => {
-    // Only keep warnings that look like failures; avoid noise
-    const message = args.map(stringifyArg).join(" ");
-    if (/failed|error|uncaught|cors/i.test(message)) {
-      pushCapped(consoleErrors, {
-        level: "warn",
-        message,
-        time: new Date().toISOString()
-      });
-    }
-    originalWarn(...args);
-  };
-
-  window.addEventListener("error", (event) => {
-    pushCapped(consoleErrors, {
-      level: "error",
-      message: event.message || "Script error",
-      source: event.filename || "",
-      line: event.lineno || 0,
-      time: new Date().toISOString()
-    });
-  });
-
-  window.addEventListener("unhandledrejection", (event) => {
-    pushCapped(consoleErrors, {
-      level: "error",
-      message: `Unhandled rejection: ${stringifyArg(event.reason)}`,
-      time: new Date().toISOString()
-    });
-  });
-
-  // Capture failed fetches/XHR after script load (honest limitation: not historical)
-  const originalFetch = window.fetch?.bind(window);
-  if (originalFetch) {
-    window.fetch = async (...args) => {
-      try {
-        const response = await originalFetch(...args);
-        if (!response.ok) {
-          pushCapped(failedRequests, {
-            type: "fetch",
-            url: String(args[0]?.url || args[0] || ""),
-            status: response.status,
-            time: new Date().toISOString()
-          });
-        }
-        return response;
-      } catch (error) {
-        pushCapped(failedRequests, {
-          type: "fetch",
-          url: String(args[0]?.url || args[0] || ""),
-          status: 0,
-          error: String(error?.message || error),
-          time: new Date().toISOString()
-        });
-        throw error;
-      }
-    };
-  }
-
-  const XHR = XMLHttpRequest.prototype;
-  const open = XHR.open;
-  const send = XHR.send;
-  XHR.open = function (method, url, ...rest) {
-    this.__wtUrl = String(url || "");
-    this.__wtMethod = String(method || "GET");
-    return open.call(this, method, url, ...rest);
-  };
-  XHR.send = function (...args) {
-    this.addEventListener("loadend", () => {
-      if (this.status >= 400 || this.status === 0) {
-        pushCapped(failedRequests, {
-          type: "xhr",
-          method: this.__wtMethod,
-          url: this.__wtUrl,
-          status: this.status,
-          time: new Date().toISOString()
-        });
-      }
-    });
-    return send.apply(this, args);
-  };
 
   function stringifyArg(value) {
     if (value == null) {
@@ -133,33 +38,138 @@
     }
   }
 
+  if (!window.__wtHooksInstalled) {
+    window.__wtHooksInstalled = true;
+
+    const originalError = console.error.bind(console);
+    const originalWarn = console.warn.bind(console);
+
+    console.error = (...args) => {
+      pushCapped(consoleErrors, {
+        level: "error",
+        message: args.map(stringifyArg).join(" "),
+        time: new Date().toISOString()
+      });
+      originalError(...args);
+    };
+
+    console.warn = (...args) => {
+      const message = args.map(stringifyArg).join(" ");
+      if (/failed|error|uncaught|cors/i.test(message)) {
+        pushCapped(consoleErrors, {
+          level: "warn",
+          message,
+          time: new Date().toISOString()
+        });
+      }
+      originalWarn(...args);
+    };
+
+    window.addEventListener("error", (event) => {
+      pushCapped(consoleErrors, {
+        level: "error",
+        message: event.message || "Script error",
+        source: event.filename || "",
+        line: event.lineno || 0,
+        time: new Date().toISOString()
+      });
+    });
+
+    window.addEventListener("unhandledrejection", (event) => {
+      pushCapped(consoleErrors, {
+        level: "error",
+        message: `Unhandled rejection: ${stringifyArg(event.reason)}`,
+        time: new Date().toISOString()
+      });
+    });
+
+    const originalFetch = window.fetch?.bind(window);
+    if (originalFetch) {
+      window.fetch = async (...args) => {
+        try {
+          const response = await originalFetch(...args);
+          if (!response.ok) {
+            pushCapped(failedRequests, {
+              type: "fetch",
+              url: String(args[0]?.url || args[0] || ""),
+              status: response.status,
+              time: new Date().toISOString()
+            });
+          }
+          return response;
+        } catch (error) {
+          pushCapped(failedRequests, {
+            type: "fetch",
+            url: String(args[0]?.url || args[0] || ""),
+            status: 0,
+            error: String(error?.message || error),
+            time: new Date().toISOString()
+          });
+          throw error;
+        }
+      };
+    }
+
+    const XHR = XMLHttpRequest.prototype;
+    const open = XHR.open;
+    const send = XHR.send;
+    XHR.open = function (method, url, ...rest) {
+      this.__wtUrl = String(url || "");
+      this.__wtMethod = String(method || "GET");
+      return open.call(this, method, url, ...rest);
+    };
+    XHR.send = function (...args) {
+      this.addEventListener("loadend", () => {
+        if (this.status >= 400 || this.status === 0) {
+          pushCapped(failedRequests, {
+            type: "xhr",
+            method: this.__wtMethod,
+            url: this.__wtUrl,
+            status: this.status,
+            time: new Date().toISOString()
+          });
+        }
+      });
+      return send.apply(this, args);
+    };
+  }
+
+  window.__websiteToolkitInjected = true;
+
   function buildSelector(el) {
     if (!el || el.nodeType !== 1) {
       return "";
     }
-    if (el.id) {
-      return `#${cssEscape(el.id)}`;
-    }
-    const parts = [];
-    let node = el;
-    let depth = 0;
-    while (node && node.nodeType === 1 && depth < 5) {
-      let part = node.tagName.toLowerCase();
-      if (node.classList?.length) {
-        part += `.${[...node.classList].slice(0, 2).map(cssEscape).join(".")}`;
+    try {
+      if (el.id) {
+        return `#${cssEscape(el.id)}`;
       }
-      const parent = node.parentElement;
-      if (parent) {
-        const siblings = [...parent.children].filter((c) => c.tagName === node.tagName);
-        if (siblings.length > 1) {
-          part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+      const parts = [];
+      let node = el;
+      let depth = 0;
+      while (node && node.nodeType === 1 && depth < 5) {
+        let part = node.tagName.toLowerCase();
+        if (node.classList?.length) {
+          part += `.${Array.from(node.classList).slice(0, 2).map(cssEscape).join(".")}`;
         }
+        const parent = node.parentElement;
+        if (parent?.children) {
+          const siblings = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+          if (siblings.length > 1) {
+            const index = siblings.indexOf(node);
+            if (index >= 0) {
+              part += `:nth-of-type(${index + 1})`;
+            }
+          }
+        }
+        parts.unshift(part);
+        node = parent;
+        depth += 1;
       }
-      parts.unshift(part);
-      node = parent;
-      depth += 1;
+      return parts.join(" > ");
+    } catch {
+      return el.tagName ? el.tagName.toLowerCase() : "";
     }
-    return parts.join(" > ");
   }
 
   function cssEscape(value) {
@@ -326,7 +336,10 @@
       }
     }
     if (el.labels && el.labels.length) {
-      return [...el.labels].map((l) => l.textContent || "").join(" ").trim();
+      return Array.from(el.labels)
+        .map((l) => l.textContent || "")
+        .join(" ")
+        .trim();
     }
     return (el.textContent || el.value || el.getAttribute("title") || el.getAttribute("alt") || "").trim();
   }
@@ -885,6 +898,306 @@
     };
   }
 
+  function rgbToHex(r, g, b) {
+    const h = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+    return `#${h(r)}${h(g)}${h(b)}`.toUpperCase();
+  }
+
+  function parseCssColor(value) {
+    if (!value || value === "transparent" || value === "rgba(0, 0, 0, 0)") {
+      return null;
+    }
+    const normalized = String(value).trim();
+    // Modern: rgb(21 32 43) / rgb(21 32 43 / 0.5) and legacy comma syntax
+    const modern = normalized.match(
+      /^rgba?\(\s*([\d.]+)\s*[, ]\s*([\d.]+)\s*[, ]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i
+    );
+    if (modern) {
+      let alpha = modern[4] == null ? 1 : Number(String(modern[4]).replace("%", ""));
+      if (String(modern[4] || "").includes("%")) {
+        alpha = alpha / 100;
+      }
+      if (alpha < 0.08) {
+        return null;
+      }
+      return {
+        hex: rgbToHex(Number(modern[1]), Number(modern[2]), Number(modern[3])),
+        alpha,
+        css: value
+      };
+    }
+    if (/^#[0-9a-f]{3,8}$/i.test(normalized)) {
+      let hex = normalized.toUpperCase();
+      if (hex.length === 4) {
+        hex = `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+      }
+      return { hex: hex.slice(0, 7), alpha: 1, css: value };
+    }
+    // Last resort: let the browser resolve named colors via canvas
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        return null;
+      }
+      ctx.fillStyle = "#012345";
+      ctx.fillStyle = normalized;
+      const resolved = String(ctx.fillStyle || "");
+      if (/^#[0-9a-f]{6}$/i.test(resolved) && resolved.toLowerCase() !== "#012345") {
+        return { hex: resolved.toUpperCase(), alpha: 1, css: value };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function primaryFontName(stack) {
+    if (!stack) {
+      return null;
+    }
+    const first = String(stack)
+      .split(",")[0]
+      .trim()
+      .replace(/^["']|["']$/g, "");
+    if (!first) {
+      return null;
+    }
+    const lower = first.toLowerCase();
+    const generic = new Set([
+      "serif",
+      "sans-serif",
+      "monospace",
+      "cursive",
+      "fantasy",
+      "system-ui",
+      "ui-sans-serif",
+      "ui-serif",
+      "ui-monospace",
+      "ui-rounded",
+      "emoji",
+      "math",
+      "fangsong",
+      "inherit",
+      "initial",
+      "unset",
+      "revert",
+      "revert-layer",
+      "-apple-system",
+      "blinkmacsystemfont"
+    ]);
+    if (generic.has(lower)) {
+      return null;
+    }
+    return first;
+  }
+
+  function collectFontsAndColors() {
+    const fontCounts = new Map();
+    const colorCounts = new Map();
+    const bgCounts = new Map();
+    const fontSources = [];
+    const declaredFonts = new Set();
+
+    // Collect declared families only as metadata (not as "used")
+    try {
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try {
+          rules = sheet.cssRules;
+        } catch {
+          continue;
+        }
+        if (!rules) {
+          continue;
+        }
+        for (const rule of rules) {
+          const isFontFace =
+            rule.type === 5 ||
+            (typeof CSSRule !== "undefined" && rule.type === CSSRule.FONT_FACE_RULE) ||
+            rule.constructor?.name === "CSSFontFaceRule";
+          if (!isFontFace) {
+            continue;
+          }
+          const family = primaryFontName(rule.style?.getPropertyValue?.("font-family") || rule.style?.fontFamily);
+          const src = rule.style?.getPropertyValue?.("src") || "";
+          if (family) {
+            declaredFonts.add(family);
+            if (src && fontSources.length < 30) {
+              fontSources.push({ family, src: src.slice(0, 200) });
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore stylesheet access errors
+    }
+
+    for (const link of document.querySelectorAll('link[rel="stylesheet"][href*="fonts"], link[href*="fonts.googleapis"], link[href*="fonts.gstatic"]')) {
+      const href = link.href || "";
+      if (href && fontSources.length < 30) {
+        fontSources.push({ family: "stylesheet", src: href.slice(0, 240) });
+      }
+      for (const match of href.matchAll(/family=([^&:]+)/gi)) {
+        const family = decodeURIComponent(match[1].replace(/\+/g, " "));
+        if (family) {
+          declaredFonts.add(family);
+        }
+      }
+    }
+
+    // Count only fonts on visible text nodes (actually rendered copy)
+    const skipTags = new Set([
+      "SCRIPT",
+      "STYLE",
+      "NOSCRIPT",
+      "TEMPLATE",
+      "SVG",
+      "PATH",
+      "META",
+      "LINK",
+      "HEAD",
+      "BR",
+      "HR",
+      "IMG",
+      "PICTURE",
+      "SOURCE",
+      "VIDEO",
+      "AUDIO",
+      "CANVAS",
+      "IFRAME"
+    ]);
+
+    let textNodesSeen = 0;
+    const maxTextNodes = 500;
+
+    if (document.body) {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          const raw = node.nodeValue || "";
+          if (!raw || !/\S/.test(raw)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          const parent = node.parentElement;
+          if (!parent || skipTags.has(parent.tagName)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+
+      while (textNodesSeen < maxTextNodes) {
+        const node = walker.nextNode();
+        if (!node) {
+          break;
+        }
+        textNodesSeen += 1;
+        const el = node.parentElement;
+        if (!(el instanceof Element)) {
+          continue;
+        }
+        const style = window.getComputedStyle(el);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          Number(style.opacity || "1") < 0.05
+        ) {
+          continue;
+        }
+        const rect = el.getBoundingClientRect?.();
+        if (rect && (rect.width < 1 || rect.height < 1)) {
+          continue;
+        }
+
+        const textLen = String(node.nodeValue || "").replace(/\s+/g, " ").trim().length;
+        if (textLen < 1) {
+          continue;
+        }
+
+        const family = primaryFontName(style.fontFamily);
+        if (family) {
+          const size = parseFloat(style.fontSize) || 14;
+          // Weight by readable text amount so tiny labels don't dominate
+          const weight = Math.max(1, Math.round((textLen * size) / 20));
+          fontCounts.set(family, (fontCounts.get(family) || 0) + weight);
+        }
+
+        const fg = parseCssColor(style.color);
+        if (fg) {
+          colorCounts.set(fg.hex, (colorCounts.get(fg.hex) || 0) + Math.max(1, Math.round(textLen / 8)));
+        }
+      }
+    }
+
+    // Background colors: sample visible painted boxes (not every declared CSS color)
+    const nodes = document.body ? document.body.querySelectorAll("body, body *") : [];
+    const limit = Math.min(nodes.length, 600);
+    const step = Math.max(1, Math.floor(limit / 180));
+    for (let i = 0; i < limit; i += step) {
+      const el = nodes[i];
+      if (!(el instanceof Element)) {
+        continue;
+      }
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") < 0.05) {
+        continue;
+      }
+      const rect = el.getBoundingClientRect?.();
+      if (rect && (rect.width < 2 || rect.height < 2)) {
+        continue;
+      }
+      const bg = parseCssColor(style.backgroundColor);
+      if (bg) {
+        const area = rect ? Math.min(40000, Math.max(1, rect.width * rect.height)) : 1;
+        bgCounts.set(bg.hex, (bgCounts.get(bg.hex) || 0) + Math.round(area / 400));
+      }
+    }
+
+    for (const el of [document.documentElement, document.body]) {
+      if (!el) {
+        continue;
+      }
+      const style = window.getComputedStyle(el);
+      const bg = parseCssColor(style.backgroundColor);
+      if (bg) {
+        bgCounts.set(bg.hex, (bgCounts.get(bg.hex) || 0) + 25);
+      }
+    }
+
+    function topEntries(map, max) {
+      return [...map.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, max)
+        .map(([value, count]) => ({ value, count }));
+    }
+
+    // Drop negligible one-off faces (widgets / hidden leftovers)
+    const ranked = topEntries(fontCounts, 24).filter((row, index) => {
+      if (index < 3) {
+        return true;
+      }
+      const top = topEntries(fontCounts, 1)[0]?.count || 1;
+      return row.count >= Math.max(8, top * 0.04);
+    });
+
+    const fonts = ranked.slice(0, 10).map((row) => ({
+      family: row.value,
+      weight: row.count,
+      declared: declaredFonts.has(row.value),
+      source: fontSources.find((s) => s.family === row.value)?.src || null
+    }));
+
+    return {
+      available: true,
+      fonts,
+      fontFiles: fontSources.filter((s) => s.family !== "stylesheet").slice(0, 20),
+      fontStylesheets: fontSources.filter((s) => s.family === "stylesheet").map((s) => s.src).slice(0, 10),
+      textColors: topEntries(colorCounts, 14).map((row) => ({ hex: row.value, count: row.count })),
+      backgroundColors: topEntries(bgCounts, 14).map((row) => ({ hex: row.value, count: row.count }))
+    };
+  }
+
   function runFullScan() {
     const resources = getResources();
     const buckets = classifyResources(resources);
@@ -919,9 +1232,29 @@
       };
     }
 
+    let design = {
+      available: false,
+      fonts: [],
+      textColors: [],
+      backgroundColors: [],
+      error: null
+    };
+    try {
+      design = collectFontsAndColors();
+    } catch (error) {
+      design = {
+        available: false,
+        fonts: [],
+        textColors: [],
+        backgroundColors: [],
+        error: error?.message || "Font/color detection unavailable"
+      };
+    }
+
     return {
       page: collectPageMeta(),
       technology,
+      design,
       performance: {
         navigation: getNavTiming(),
         vitals: getWebVitalsSnapshot(),
@@ -951,27 +1284,34 @@
     };
   }
 
-  api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || typeof message !== "object") {
-      return undefined;
-    }
-    if (message.type === "wt-ping") {
-      sendResponse({ ok: true });
-      return false;
-    }
-    if (message.type === "wt-scan") {
-      try {
-        const report = runFullScan();
-        sendResponse({ ok: true, report });
-      } catch (error) {
-        sendResponse({ ok: false, error: error?.message || "Scan failed" });
+  window.__wtRunScan = runFullScan;
+  window.__wtVersion = SCRIPT_VERSION;
+
+  if (!window.__wtMsgListeningV3) {
+    window.__wtMsgListeningV3 = true;
+    api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (!message || typeof message !== "object") {
+        return undefined;
       }
-      return false;
-    }
-    if (message.type === "wt-page-meta") {
-      sendResponse({ ok: true, page: collectPageMeta() });
-      return false;
-    }
-    return undefined;
-  });
+      if (message.type === "wt-ping") {
+        sendResponse({ ok: true, version: window.__wtVersion || SCRIPT_VERSION });
+        return false;
+      }
+      // wt-scan-v3 avoids racing an older injected listener that lacks design data
+      if (message.type === "wt-scan-v3" || message.type === "wt-scan") {
+        try {
+          const report = typeof window.__wtRunScan === "function" ? window.__wtRunScan() : runFullScan();
+          sendResponse({ ok: true, report });
+        } catch (error) {
+          sendResponse({ ok: false, error: error?.message || "Scan failed" });
+        }
+        return false;
+      }
+      if (message.type === "wt-page-meta") {
+        sendResponse({ ok: true, page: collectPageMeta() });
+        return false;
+      }
+      return undefined;
+    });
+  }
 })();

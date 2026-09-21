@@ -4,7 +4,7 @@ import { saveLastScan, getLastScan } from "../shared/storage.js";
 import { renderPerformance } from "../modules/performance/view.js";
 import { renderAccessibility } from "../modules/accessibility/view.js";
 import { renderBugReporter, prefillFromFinding } from "../modules/bug-reporter/view.js";
-import { renderContao } from "../modules/contao/view.js";
+import { renderCms, cmsNavLabel } from "../modules/cms/view.js";
 
 const els = {
   host: document.getElementById("page-host"),
@@ -14,12 +14,13 @@ const els = {
   previous: document.getElementById("previous-scan"),
   scan: document.getElementById("btn-scan"),
   openTab: document.getElementById("btn-open-tab"),
+  navCms: document.getElementById("nav-cms"),
   views: {
     overview: document.getElementById("view-overview"),
     performance: document.getElementById("view-performance"),
     accessibility: document.getElementById("view-accessibility"),
     bugs: document.getElementById("view-bugs"),
-    contao: document.getElementById("view-contao")
+    cms: document.getElementById("view-cms")
   }
 };
 
@@ -84,20 +85,20 @@ async function getTargetTab() {
 }
 
 async function ensureContentScript(tabId) {
+  // Always reinject so window.__wtRunScan is updated to the latest analyzer.
   try {
-    await api.tabs.sendMessage(tabId, { type: "wt-ping" });
-    return true;
+    await api.scripting.executeScript({
+      target: { tabId },
+      files: ["src/content/content.js"]
+    });
   } catch {
-    try {
-      await api.scripting.executeScript({
-        target: { tabId },
-        files: ["src/content/content.js"]
-      });
-      await api.tabs.sendMessage(tabId, { type: "wt-ping" });
-      return true;
-    } catch {
-      return false;
-    }
+    // Fall through to ping — manifest content script may already be active
+  }
+  try {
+    const ping = await api.tabs.sendMessage(tabId, { type: "wt-ping" });
+    return Boolean(ping?.ok);
+  } catch {
+    return false;
   }
 }
 
@@ -148,11 +149,20 @@ async function scanPage() {
       throw new Error("Could not reach this page. Restricted pages cannot be inspected.");
     }
 
-    const response = await api.tabs.sendMessage(activeTab.id, { type: "wt-scan" });
+    const response = await api.tabs.sendMessage(activeTab.id, { type: "wt-scan-v3" });
     if (!response?.ok) {
       throw new Error(response?.error || "Scan failed.");
     }
     report = response.report;
+    if (!report.design) {
+      report.design = {
+        available: false,
+        fonts: [],
+        textColors: [],
+        backgroundColors: [],
+        error: "Fonts & colors missing — reload the extension, refresh the page, then Scan again."
+      };
+    }
     previousScan = null;
     updatePreviousBanner();
 
@@ -212,6 +222,81 @@ function techLines(technology) {
     .join("");
 }
 
+function primaryCmsLabel(technology, contao) {
+  const cmsList = technology?.byCategory?.cms || [];
+  if (cmsList.length) {
+    return cmsList.map((item) => item.name).join(", ");
+  }
+  if (contao?.detected) {
+    return contao.version ? `Contao ${contao.version}` : "Contao";
+  }
+  if (technology && technology.available === false) {
+    return "Unavailable";
+  }
+  return "None detected";
+}
+
+function designSections(design) {
+  if (!design?.available) {
+    return `<div class="card"><h2>Fonts &amp; colors</h2><p class="muted">${escapeHtml(
+      design?.error || "Detection unavailable — reload the extension, refresh this page, then click Scan page."
+    )}</p></div>`;
+  }
+
+  const fonts = design.fonts || [];
+  const textColors = design.textColors || [];
+  const bgColors = design.backgroundColors || [];
+
+  const fontRows = fonts.length
+    ? fonts
+        .map((f) => {
+          const safeFamily = String(f.family || "").replace(/[^a-zA-Z0-9 \-_]/g, "");
+          return `
+        <div class="design-font" style="font-family:${safeFamily ? `"${escapeHtml(safeFamily)}"` : "sans-serif"}, sans-serif">
+          <strong>${escapeHtml(f.family)}</strong>
+          <span class="muted">Sample preview</span>
+        </div>`;
+        })
+        .join("")
+    : `<p class="muted">No fonts detected.</p>`;
+
+  function colorRows(list, emptyText) {
+    if (!list.length) {
+      return `<p class="muted">${emptyText}</p>`;
+    }
+    return `<div class="swatch-grid">${list
+      .map(
+        (c) => `
+      <div class="swatch" title="${escapeHtml(c.hex)} · used ~${c.count}×">
+        <span class="swatch-chip" style="background:${escapeHtml(c.hex)}"></span>
+        <span class="mono">${escapeHtml(c.hex)}</span>
+      </div>`
+      )
+      .join("")}</div>`;
+  }
+
+  return `
+    <div class="card">
+      <h2>Fonts</h2>
+      <p class="muted">Families actually used on visible text (not every loaded @font-face).</p>
+      <div class="design-font-list">${fontRows}</div>
+      ${
+        design.fontStylesheets?.length
+          ? `<p class="muted" style="margin-top:8px">Font stylesheets: ${design.fontStylesheets.length}</p>`
+          : ""
+      }
+    </div>
+    <div class="card">
+      <h2>Colors</h2>
+      <p class="muted">Most common text and background colors sampled from visible elements.</p>
+      <h3>Text</h3>
+      ${colorRows(textColors, "No text colors detected.")}
+      <h3>Backgrounds</h3>
+      ${colorRows(bgColors, "No background colors detected.")}
+    </div>
+  `;
+}
+
 function renderOverview() {
   const root = els.views.overview;
   if (!report) {
@@ -224,6 +309,8 @@ function renderOverview() {
   const a11y = report.accessibility;
   const contao = report.contao;
   const tech = report.technology;
+  const design = report.design;
+  const cmsLabel = primaryCmsLabel(tech, contao);
 
   root.innerHTML = `
     <div class="card">
@@ -235,7 +322,7 @@ function renderOverview() {
         <div class="stat"><div class="label">Viewport</div><div class="value">${page.viewport.width}×${page.viewport.height}</div></div>
         <div class="stat"><div class="label">DOM elements</div><div class="value">${page.domElements.toLocaleString()}</div></div>
         <div class="stat"><div class="label">Scanned</div><div class="value" style="font-size:11px">${escapeHtml(relativeTime(page.timestamp))}</div></div>
-        <div class="stat"><div class="label">Contao</div><div class="value" style="font-size:13px">${contao.detected ? "Detected" : "Not detected"}</div></div>
+        <div class="stat"><div class="label">CMS</div><div class="value" style="font-size:13px">${escapeHtml(cmsLabel)}</div></div>
       </div>
     </div>
 
@@ -244,10 +331,14 @@ function renderOverview() {
       ${techLines(tech)}
       ${
         contao.detected
-          ? `<p class="muted" style="margin-top:8px">Contao module available with diagnostics${contao.version ? ` · version ${escapeHtml(contao.version)}` : " · version unknown"}.</p>`
-          : ""
+          ? `<p class="muted" style="margin-top:8px">Contao diagnostics available in the ${escapeHtml(cmsNavLabel(report))} tab${contao.version ? ` · version ${escapeHtml(contao.version)}` : " · version unknown"}.</p>`
+          : cmsLabel !== "None detected" && cmsLabel !== "Unavailable"
+            ? `<p class="muted" style="margin-top:8px">Open the <strong>${escapeHtml(cmsLabel)}</strong> tab for CMS signals and related assets.</p>`
+            : ""
       }
     </div>
+
+    ${designSections(design)}
 
     <div class="card">
       <h2>Module summaries</h2>
@@ -261,7 +352,7 @@ function renderOverview() {
         <button type="button" class="btn small" data-goto="performance">Performance</button>
         <button type="button" class="btn small" data-goto="accessibility">Accessibility</button>
         <button type="button" class="btn small" data-goto="bugs">Bug Reporter</button>
-        <button type="button" class="btn small" data-goto="contao">Contao</button>
+        <button type="button" class="btn small" data-goto="cms">${escapeHtml(cmsNavLabel(report))}</button>
       </div>
     </div>
   `;
@@ -275,11 +366,18 @@ function reportFinding(finding) {
   showView("bugs");
 }
 
+function updateCmsNav() {
+  if (els.navCms) {
+    els.navCms.textContent = cmsNavLabel(report);
+  }
+}
+
 function renderAll() {
+  updateCmsNav();
   renderOverview();
   renderPerformance(els.views.performance, report, { onReportFinding: reportFinding });
   renderAccessibility(els.views.accessibility, report, { onReportFinding: reportFinding });
-  renderContao(els.views.contao, report, { onReportFinding: reportFinding });
+  renderCms(els.views.cms, report, { onReportFinding: reportFinding });
   renderBugReporter(els.views.bugs, report, {
     prefill: bugPrefill,
     onStatus: setStatus
