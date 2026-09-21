@@ -48,10 +48,11 @@ The Extension does not require an account.
 
 ## Permissions
 
-- **activeTab** — access the tab you are using when you open the Extension or trigger a scan/screenshot.  
-- **scripting** — inject/reconnect the local content script so scanning works on the active page.  
+- **activeTab** — temporary access to the tab you are using when you open the Extension or trigger a scan/screenshot.  
+- **scripting** — inject the local analyzer into that tab on demand.  
 - **storage** — save scan results and bug drafts on your device.  
-- **Host access to http(s) pages** — run the content script and capture a visible-tab screenshot on normal websites you choose to inspect.
+
+The Extension does **not** request broad host permissions. It does not run on websites until you open it / scan.
 
 ## Remote code
 
